@@ -11,6 +11,11 @@ on:
         description: Artifact ID from a prior run in this repository
         required: false
         type: string
+      prior_only:
+        description: Submit only the prior-run artifact for isolated byte verification
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -49,6 +54,7 @@ jobs:
           CURRENT_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
           FOREIGN_ARTIFACT_ID: ${{ inputs.foreign_artifact_id }}
           PRIOR_ARTIFACT_ID: ${{ inputs.prior_artifact_id }}
+          PRIOR_ONLY: ${{ inputs.prior_only }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -83,8 +89,11 @@ jobs:
               return response.status
             }
 
-            await create('foreign-repository-artifact', process.env.FOREIGN_ARTIFACT_ID)
-            await create('same-repository-prior-run-artifact', process.env.PRIOR_ARTIFACT_ID)
-            await create('random-artifact-control', '9876543210')
-            await create('same-repository-current-run-positive-control', process.env.CURRENT_ARTIFACT_ID)
-
+            if (process.env.PRIOR_ONLY === 'true') {
+              await create('same-repository-prior-run-artifact-isolated', process.env.PRIOR_ARTIFACT_ID)
+            } else {
+              await create('foreign-repository-artifact', process.env.FOREIGN_ARTIFACT_ID)
+              await create('same-repository-prior-run-artifact', process.env.PRIOR_ARTIFACT_ID)
+              await create('random-artifact-control', '9876543210')
+              await create('same-repository-current-run-positive-control', process.env.CURRENT_ARTIFACT_ID)
+            }
