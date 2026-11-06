@@ -1,0 +1,90 @@
+name: pages-binding-a
+
+on:
+  workflow_dispatch:
+    inputs:
+      foreign_artifact_id:
+        description: Artifact ID created in the owned B repository
+        required: false
+        type: string
+      prior_artifact_id:
+        description: Artifact ID from a prior run in this repository
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  binding:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build synthetic site
+        shell: bash
+        run: |
+          mkdir -p _site
+          printf '%s\n' "PAGES_BINDING_A_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" > _site/index.html
+
+      - name: Upload current-run Pages artifact
+        id: upload
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Record non-secret artifact metadata
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        run: |
+          printf 'artifact_id=%s\nrun_id=%s\n' "$ARTIFACT_ID" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Probe repository, run, artifact and OIDC binding
+        if: inputs.foreign_artifact_id != '' && inputs.prior_artifact_id != ''
+        uses: actions/github-script@v8
+        env:
+          GH_JOB_TOKEN: ${{ github.token }}
+          CURRENT_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          FOREIGN_ARTIFACT_ID: ${{ inputs.foreign_artifact_id }}
+          PRIOR_ARTIFACT_ID: ${{ inputs.prior_artifact_id }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const idToken = await core.getIDToken()
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
+
+            async function create(name, artifactId) {
+              const url = `${process.env.GITHUB_API_URL}/repos/${owner}/${repo}/pages/deployments`
+              const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                  accept: 'application/vnd.github+json',
+                  authorization: `Bearer ${process.env.GH_JOB_TOKEN}`,
+                  'content-type': 'application/json',
+                  'x-github-api-version': '2022-11-28'
+                },
+                body: JSON.stringify({
+                  artifact_id: Number(artifactId),
+                  pages_build_version: process.env.GITHUB_SHA,
+                  oidc_token: idToken
+                })
+              })
+              const responseText = await response.text()
+              let responseJson = {}
+              try { responseJson = JSON.parse(responseText) } catch (_) {}
+              core.info(`BINDING_RESULT ${JSON.stringify({
+                case: name,
+                status: response.status,
+                message: responseJson.message || null,
+                deployment_id: response.ok ? (responseJson.id || null) : null
+              })}`)
+              return response.status
+            }
+
+            await create('foreign-repository-artifact', process.env.FOREIGN_ARTIFACT_ID)
+            await create('same-repository-prior-run-artifact', process.env.PRIOR_ARTIFACT_ID)
+            await create('random-artifact-control', '9876543210')
+            await create('same-repository-current-run-positive-control', process.env.CURRENT_ARTIFACT_ID)
+
